@@ -107,8 +107,8 @@ class Patient(BaseModel):
     age: int
     blood_grp: str
     gender: Literal["male", "female", "other"]
-    height: int
-    weight: int
+    height: float
+    weight: float
     bmi: float
     email: EmailStr
     phone_number: str
