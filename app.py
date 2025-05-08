@@ -1,8 +1,8 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 from fastapi import  BackgroundTasks, Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from db import admin_lobby,doctor_lobby, fix_mongo_id, keep_server_alive, patient_data,notification_data, send_email_task, update_questionnaire_completion
-from models import Admin, Doctor, DoctorAssignRequest, EmailRequest, GoogleLoginRequest, LoginRequest, MarkReadRequest, Notification, PasswordResetRequest, Patient, PostSurgeryDetailsUpdateRequest, QuestionnaireAppendRequest, QuestionnaireScoreAppendRequest, QuestionnaireUpdateRequest, SurgeryScheduleUpdateRequest
+from models import Admin, Doctor, DoctorAssignRequest, EmailRequest, GoogleLoginRequest, LoginRequest, MarkReadRequest, Notification, PasswordResetRequest, Patient, PostSurgeryDetailsUpdateRequest, QuestionnaireAppendRequestLeft, QuestionnaireAppendRequestRight, QuestionnaireAssignedLeft, QuestionnaireAssignedRight, QuestionnaireScoreAppendRequestLeft, QuestionnaireScoreAppendRequestRight, QuestionnaireUpdateRequest, SurgeryScheduleUpdateRequest
 from datetime import date, datetime
 import asyncio
 import resend
@@ -93,9 +93,10 @@ async def register_patient(patient: Patient):
         patient_dict["post_surgery_details"]["date_of_surgery"] = datetime.combine(dos, datetime.min.time())
 
     # Convert timestamps in questionnaire_scores
-    for score in patient_dict.get("questionnaire_scores", []):
-        if isinstance(score["timestamp"], date) and not isinstance(score["timestamp"], datetime):
-            score["timestamp"] = datetime.combine(score["timestamp"], datetime.min.time())
+    for key in ["questionnaire_scores_left", "questionnaire_scores_right"]:
+        for score in patient_dict.get(key, []):
+            if isinstance(score["timestamp"], date) and not isinstance(score["timestamp"], datetime):
+                score["timestamp"] = datetime.combine(score["timestamp"], datetime.min.time())
 
     result = await patient_data.insert_one(patient_dict)
 
@@ -194,8 +195,8 @@ async def update_doctor_assignment(data: DoctorAssignRequest):
         return {"message": "No update performed. Doctor might already be assigned to this value."}
 
     
-@app.put("/add-questionnaire")
-async def add_questionnaire(data: QuestionnaireAppendRequest):
+@app.put("/add-questionnaire-left")
+async def add_questionnaire(data: QuestionnaireAppendRequestLeft):
     patient = await patient_data.find_one({"uhid": data.uhid})
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -203,13 +204,13 @@ async def add_questionnaire(data: QuestionnaireAppendRequest):
     # Get existing name-period pairs
     existing_pairs = set(
         (q["name"], q["period"])
-        for q in patient.get("questionnaire_assigned", [])
+        for q in patient.get("questionnaire_assigned_left", [])
     )
 
     # Filter out duplicates from the request
     new_questionnaires = [
         q.dict()
-        for q in data.questionnaire_assigned
+        for q in data.questionnaire_assigned_left
         if (q.name, q.period) not in existing_pairs
     ]
 
@@ -224,33 +225,92 @@ async def add_questionnaire(data: QuestionnaireAppendRequest):
     result = await patient_data.update_one(
         {"uhid": data.uhid},
         {
-            "$push": {"questionnaire_assigned": {"$each": new_questionnaires}},
+            "$push": {"questionnaire_assigned_left": {"$each": new_questionnaires}},
             "$set": {"current_status": new_status}
         }
     )
 
     if result.modified_count:
         return {
-            "message": "Questionnaire(s) added successfully and current_status updated",
+            "message": "Questionnaire(s) added successfully to left and current_status updated",
             "updated_status": new_status
         }
 
     return {"message": "No changes made"}
 
 
-@app.put("/add-questionnaire-scores")
-async def add_questionnaire_scores(data: QuestionnaireScoreAppendRequest):
+@app.put("/add-questionnaire-scores-left")
+async def add_questionnaire_scores(data: QuestionnaireScoreAppendRequestLeft):
     patient = await patient_data.find_one({"uhid": data.uhid})
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
     result = await patient_data.update_one(
         {"uhid": data.uhid},
-        {"$push": {"questionnaire_scores": {"$each": [score.dict() for score in data.questionnaire_scores]}}}
+        {"$push": {"questionnaire_scores_left": {"$each": [score.dict() for score in data.questionnaire_scores_left]}}}
     )
 
     if result.modified_count:
-        return {"message": "Score(s) added successfully"}
+        return {"message": "Score(s) added successfully to left"}
+    return {"message": "No changes made"}
+
+@app.put("/add-questionnaire-right")
+async def add_questionnaire(data: QuestionnaireAppendRequestRight):
+    patient = await patient_data.find_one({"uhid": data.uhid})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # Get existing name-period pairs
+    existing_pairs = set(
+        (q["name"], q["period"])
+        for q in patient.get("questionnaire_assigned_right", [])
+    )
+
+    # Filter out duplicates from the request
+    new_questionnaires = [
+        q.dict()
+        for q in data.questionnaire_assigned_right
+        if (q.name, q.period) not in existing_pairs
+    ]
+
+    if not new_questionnaires:
+        return {"message": "No new questionnaire(s) to add"}
+
+    # Optionally: pick latest period, or use the period of the first new questionnaire
+    # If multiple questionnaires have different periods, you can choose how to handle
+    new_status = new_questionnaires[0]["period"]  # For example, use the first one
+
+    # Update the document
+    result = await patient_data.update_one(
+        {"uhid": data.uhid},
+        {
+            "$push": {"questionnaire_assigned_right": {"$each": new_questionnaires}},
+            "$set": {"current_status": new_status}
+        }
+    )
+
+    if result.modified_count:
+        return {
+            "message": "Questionnaire(s) added successfully to right and current_status updated",
+            "updated_status": new_status
+        }
+
+    return {"message": "No changes made"}
+
+
+@app.put("/add-questionnaire-scores-right")
+async def add_questionnaire_scores(data: QuestionnaireScoreAppendRequestRight):
+    patient = await patient_data.find_one({"uhid": data.uhid})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    result = await patient_data.update_one(
+        {"uhid": data.uhid},
+        {"$push": {"questionnaire_scores_right": {"$each": [score.dict() for score in data.questionnaire_scores_right]}}}
+    )
+
+    if result.modified_count:
+        return {"message": "Score(s) added successfully to right"}
     return {"message": "No changes made"}
 
 @app.put("/update-surgery-schedule")
@@ -474,3 +534,137 @@ async def send_email(email_request: EmailRequest, background_tasks: BackgroundTa
         return {"status": "success", "message": "Email sending initiated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/get-all-patients", response_model=List[Patient])
+async def get_all_patients():
+    patients_cursor = patient_data.find()
+    patients = []
+    async for patient in patients_cursor:
+        patient["_id"] = str(patient["_id"])  # convert ObjectId to string
+        patients.append(Patient(**patient))
+    return patients
+
+def ensure_datetime(value):
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime.combine(value, datetime.min.time())
+    return value
+
+@app.put("/patients/update-post-surgery")
+async def update_post_surgery_details(
+    uhid: str = Body(...),
+
+    date_of_surgery: Optional[date] = Body(None),
+    surgeon: Optional[str] = Body(None),
+    surgery_name: Optional[str] = Body(None),
+    procedure: Optional[str] = Body(None),
+    implant: Optional[str] = Body(None),
+    technology: Optional[str] = Body(None)
+):
+    # Build the update dict dynamically
+    update_fields = {}
+    
+    if date_of_surgery is not None:
+        # Ensure the date is converted to datetime
+        update_fields["post_surgery_details.date_of_surgery"] = ensure_datetime(date_of_surgery)
+    
+    if surgeon is not None:
+        update_fields["post_surgery_details.surgeon"] = surgeon
+    if surgery_name is not None:
+        update_fields["post_surgery_details.surgery_name"] = surgery_name
+    if procedure is not None:
+        update_fields["post_surgery_details.procedure"] = procedure
+    if implant is not None:
+        update_fields["post_surgery_details.implant"] = implant
+    if technology is not None:
+        update_fields["post_surgery_details.technology"] = technology
+
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields provided for update")
+
+    result = await patient_data.update_one(
+        {"uhid": uhid},
+        {"$set": update_fields}
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Patient not found or no changes made")
+
+    patient = await patient_data.find_one({"uhid": uhid})
+    patient["_id"] = str(patient["_id"])
+    return patient
+
+@app.patch("/patients/{uhid}/vip/toggle")
+async def toggle_vip_status(uhid: str):
+    patient = await patient_data.find_one({"uhid": uhid})
+    
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    current_vip = patient.get("vip", 0)
+    new_vip = 0 if current_vip == 1 else 1
+    
+    await patient_data.update_one({"uhid": uhid}, {"$set": {"vip": new_vip}})
+    
+    return {
+        "message": f"VIP status updated to {new_vip}",
+        "uhid": uhid,
+        "vip": new_vip
+    }
+
+@app.put("/patients/{uhid}/update-assigned-and-remove-score-left")
+async def update_assigned_and_remove_score(uhid: str, data: QuestionnaireAssignedLeft):
+    # Step 1: Update questionnaire_assigned_left (with array filter)
+    update_result = await patient_data.update_one(
+        {"uhid": uhid},
+        {
+            "$set": {
+                "questionnaire_assigned_left.$[item].assigned_date": data.assigned_date,
+                "questionnaire_assigned_left.$[item].deadline": data.deadline,
+                "questionnaire_assigned_left.$[item].completed": data.completed
+            },
+            "$pull": {
+                "questionnaire_scores_left": {
+                    "name": data.name,
+                    "period": data.period
+                }
+            }
+        },
+        array_filters=[{
+            "item.name": data.name,
+            "item.period": data.period
+        }]
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Patient or matching questionnaire not found")
+
+    return {"message": "Assigned questionnaire updated and corresponding score removed"}
+
+@app.put("/patients/{uhid}/update-assigned-and-remove-score-right")
+async def update_assigned_and_remove_score(uhid: str, data: QuestionnaireAssignedRight):
+    # Step 1: Update questionnaire_assigned_left (with array filter)
+    update_result = await patient_data.update_one(
+        {"uhid": uhid},
+        {
+            "$set": {
+                "questionnaire_assigned_right.$[item].assigned_date": data.assigned_date,
+                "questionnaire_assigned_right.$[item].deadline": data.deadline,
+                "questionnaire_assigned_right.$[item].completed": data.completed
+            },
+            "$pull": {
+                "questionnaire_scores_right": {
+                    "name": data.name,
+                    "period": data.period
+                }
+            }
+        },
+        array_filters=[{
+            "item.name": data.name,
+            "item.period": data.period
+        }]
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Patient or matching questionnaire not found")
+
+    return {"message": "Assigned questionnaire updated and corresponding score removed"}

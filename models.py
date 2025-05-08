@@ -73,14 +73,27 @@ class QuestionnaireUpdateRequest(BaseModel):
     period: str
     completed: int = 1  # Default is 1 (completed)
 
-class QuestionnaireAssigned(BaseModel):
+class QuestionnaireAssignedLeft(BaseModel):
     name: str
     period: str
     assigned_date: str
     deadline: str
     completed: Literal[0, 1]
 
-class QuestionnaireScore(BaseModel):
+class QuestionnaireScoreLeft(BaseModel):
+    name: str
+    score: List[float]
+    period: str
+    timestamp: datetime
+
+class QuestionnaireAssignedRight(BaseModel):
+    name: str
+    period: str
+    assigned_date: str
+    deadline: str
+    completed: Literal[0, 1]
+
+class QuestionnaireScoreRight(BaseModel):
     name: str
     score: List[float]
     period: str
@@ -103,6 +116,7 @@ class Patient(BaseModel):
     first_name: str
     last_name: str
     password: str
+    vip: Literal[0, 1]
     dob: str
     age: int
     blood_grp: str
@@ -116,8 +130,10 @@ class Patient(BaseModel):
     admin_assigned: Optional[str] = None
     doctor_name: Optional[str] = None
     admin_name: Optional[str] = None
-    questionnaire_assigned: Optional[List[QuestionnaireAssigned]] = []
-    questionnaire_scores: Optional[List[QuestionnaireScore]] = []
+    questionnaire_assigned_left: Optional[List[QuestionnaireAssignedLeft]] = []
+    questionnaire_scores_left: Optional[List[QuestionnaireScoreLeft]] = []
+    questionnaire_assigned_right: Optional[List[QuestionnaireAssignedRight]] = []
+    questionnaire_scores_right: Optional[List[QuestionnaireScoreRight]] = []
     surgery_scheduled: Optional[SurgeryScheduled] = None
     post_surgery_details: Optional[PostSurgeryDetails] = None
     current_status: str
@@ -129,6 +145,7 @@ class Patient(BaseModel):
                 "first_name": "John",
                 "last_name": "Doe",
                 "password": "password123",
+                "vip": 0,
                 "dob": "1990-05-15",
                 "age": 34,
                 "blood_grp": "O+",
@@ -142,7 +159,7 @@ class Patient(BaseModel):
                 "admin_assigned": "admin_01",
                 "doctor_name": "doctor_01",
                 "admin_name": "admin_01",
-                "questionnaire_assigned": [
+                "questionnaire_assigned_left": [
                     {
                         "name": "Mobility Survey",
                         "period": "weekly",
@@ -158,7 +175,37 @@ class Patient(BaseModel):
                         "completed": 1
                     }
                 ],
-                "questionnaire_scores": [
+                "questionnaire_scores_left": [
+                    {
+                        "name": "Mobility Survey",
+                        "score": 85.5,
+                        "period": "weekly",
+                        "timestamp": "2025-04-01T10:30:00"
+                    },
+                    {
+                        "name": "Pain Assessment",
+                        "score": 92.0,
+                        "period": "weekly",
+                        "timestamp": "2025-04-02T08:30:00"
+                    }
+                ],
+                "questionnaire_assigned_right": [
+                    {
+                        "name": "Mobility Survey",
+                        "period": "weekly",
+                        "assigned_date": "2025-04-01T10:00:00",
+                        "deadline": "2025-04-01T10:00:00",
+                        "completed": 0
+                    },
+                    {
+                        "name": "Pain Assessment",
+                        "period": "daily",
+                        "assigned_date": "2025-04-02T08:00:00",
+                        "deadline": "2025-04-01T10:00:00",
+                        "completed": 1
+                    }
+                ],
+                "questionnaire_scores_right": [
                     {
                         "name": "Mobility Survey",
                         "score": 85.5,
@@ -225,13 +272,21 @@ class DoctorAssignRequest(BaseModel):
     doctor_assigned: str
 
 
-class QuestionnaireAppendRequest(BaseModel):
+class QuestionnaireAppendRequestLeft(BaseModel):
     uhid: str
-    questionnaire_assigned: List[QuestionnaireAssigned]
+    questionnaire_assigned_left: List[QuestionnaireAssignedLeft]
 
-class QuestionnaireScoreAppendRequest(BaseModel):
+class QuestionnaireScoreAppendRequestLeft(BaseModel):
     uhid: str
-    questionnaire_scores: List[QuestionnaireScore]
+    questionnaire_scores_left: List[QuestionnaireScoreLeft]
+
+class QuestionnaireAppendRequestRight(BaseModel):
+    uhid: str
+    questionnaire_assigned_right: List[QuestionnaireAssignedRight]
+
+class QuestionnaireScoreAppendRequestRight(BaseModel):
+    uhid: str
+    questionnaire_scores_right: List[QuestionnaireScoreRight]
 
 class SurgeryScheduleUpdateRequest(BaseModel):
     uhid: str
