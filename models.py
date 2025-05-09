@@ -304,3 +304,7 @@ class EmailRequest(BaseModel):
     email: str
     subject: str
     message: str
+
+class QuestionnaireResetRequest(BaseModel):
+    period: str
+    questionnaires: list[str]

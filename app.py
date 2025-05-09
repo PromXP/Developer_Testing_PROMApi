@@ -1,8 +1,9 @@
+from pydantic import EmailStr
 from typing import Dict, List, Optional
 from fastapi import  BackgroundTasks, Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from db import admin_lobby,doctor_lobby, fix_mongo_id, keep_server_alive, patient_data,notification_data, send_email_task, update_questionnaire_completion
-from models import Admin, Doctor, DoctorAssignRequest, EmailRequest, GoogleLoginRequest, LoginRequest, MarkReadRequest, Notification, PasswordResetRequest, Patient, PostSurgeryDetailsUpdateRequest, QuestionnaireAppendRequestLeft, QuestionnaireAppendRequestRight, QuestionnaireAssignedLeft, QuestionnaireAssignedRight, QuestionnaireScoreAppendRequestLeft, QuestionnaireScoreAppendRequestRight, QuestionnaireUpdateRequest, SurgeryScheduleUpdateRequest
+from models import Admin, Doctor, DoctorAssignRequest, EmailRequest, GoogleLoginRequest, LoginRequest, MarkReadRequest, Notification, PasswordResetRequest, Patient, PostSurgeryDetailsUpdateRequest, QuestionnaireAppendRequestLeft, QuestionnaireAppendRequestRight, QuestionnaireAssignedLeft, QuestionnaireAssignedRight, QuestionnaireResetRequest, QuestionnaireScoreAppendRequestLeft, QuestionnaireScoreAppendRequestRight, QuestionnaireUpdateRequest, SurgeryScheduleUpdateRequest
 from datetime import date, datetime
 import asyncio
 import resend
@@ -668,3 +669,78 @@ async def update_assigned_and_remove_score(uhid: str, data: QuestionnaireAssigne
         raise HTTPException(status_code=404, detail="Patient or matching questionnaire not found")
 
     return {"message": "Assigned questionnaire updated and corresponding score removed"}
+
+@app.put("/patients/{uhid}/reset-questionnaires-by-period-left")
+async def reset_questionnaires_by_period(uhid: str, payload: QuestionnaireResetRequest):
+    # Step 1: Remove questionnaire_assigned_left entries with matching period
+    await patient_data.update_one(
+        {"uhid": uhid},
+        {"$pull": {"questionnaire_assigned_left": {"period": payload.period}}}
+    )
+
+    # Step 2: Remove questionnaire_scores_left with matching period + names
+    for name in payload.questionnaires:
+        await patient_data.update_one(
+            {"uhid": uhid},
+            {"$pull": {"questionnaire_scores_left": {"name": name, "period": payload.period}}}
+        )
+
+    # Step 3: Add new questionnaire_assigned_left entries
+    new_entries = [{
+        "name": name,
+        "period": payload.period,
+        "assigned_date": datetime.utcnow().isoformat(),
+        "deadline": datetime.utcnow().isoformat(),
+        "completed": 0
+    } for name in payload.questionnaires]
+
+    update_result = await patient_data.update_one(
+        {"uhid": uhid},
+        {"$push": {"questionnaire_assigned_left": {"$each": new_entries}}}
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    return {
+        "message": f"Reset questionnaires for period '{payload.period}'",
+        "added": new_entries
+    }
+
+@app.put("/patients/{uhid}/reset-questionnaires-by-period-right")
+async def reset_questionnaires_by_period(uhid: str, payload: QuestionnaireResetRequest):
+    # Step 1: Remove questionnaire_assigned_left entries with matching period
+    await patient_data.update_one(
+        {"uhid": uhid},
+        {"$pull": {"questionnaire_assigned_right": {"period": payload.period}}}
+    )
+
+    # Step 2: Remove questionnaire_scores_left with matching period + names
+    for name in payload.questionnaires:
+        await patient_data.update_one(
+            {"uhid": uhid},
+            {"$pull": {"questionnaire_scores_right": {"name": name, "period": payload.period}}}
+        )
+
+    # Step 3: Add new questionnaire_assigned_left entries
+    new_entries = [{
+        "name": name,
+        "period": payload.period,
+        "assigned_date": datetime.utcnow().isoformat(),
+        "deadline": datetime.utcnow().isoformat(),
+        "completed": 0
+    } for name in payload.questionnaires]
+
+    update_result = await patient_data.update_one(
+        {"uhid": uhid},
+        {"$push": {"questionnaire_assigned_right": {"$each": new_entries}}}
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    return {
+        "message": f"Reset questionnaires for period '{payload.period}'",
+        "added": new_entries
+    }
+
