@@ -1,12 +1,16 @@
 from pydantic import EmailStr
 from typing import Dict, List, Optional
-from fastapi import  BackgroundTasks, Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import  BackgroundTasks, Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from db import admin_lobby,doctor_lobby, fix_mongo_id, keep_server_alive, patient_data,notification_data, send_email_task, update_questionnaire_completion
 from models import Admin, Doctor, DoctorAssignRequest, EmailRequest, GoogleLoginRequest, LoginRequest, MarkReadRequest, Notification, PasswordResetRequest, Patient, PostSurgeryDetailsUpdateRequest, QuestionnaireAppendRequestLeft, QuestionnaireAppendRequestRight, QuestionnaireAssignedLeft, QuestionnaireAssignedRight, QuestionnaireResetRequest, QuestionnaireScoreAppendRequestLeft, QuestionnaireScoreAppendRequestRight, QuestionnaireUpdateRequest, SurgeryScheduleUpdateRequest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import asyncio
 import resend
+from jose import jwt, JWTError, ExpiredSignatureError
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = FastAPI()
 
@@ -686,11 +690,14 @@ async def reset_questionnaires_by_period(uhid: str, payload: QuestionnaireResetR
         )
 
     # Step 3: Add new questionnaire_assigned_left entries
+    now = datetime.utcnow()
+    deadline = now + timedelta(days=3)
+
     new_entries = [{
         "name": name,
         "period": payload.period,
-        "assigned_date": datetime.utcnow().isoformat(),
-        "deadline": datetime.utcnow().isoformat(),
+        "assigned_date": now.isoformat(),
+        "deadline": deadline.isoformat(),
         "completed": 0
     } for name in payload.questionnaires]
 
@@ -744,3 +751,122 @@ async def reset_questionnaires_by_period(uhid: str, payload: QuestionnaireResetR
         "added": new_entries
     }
 
+# Secret key for JWT (you can generate your own random key here)
+SECRET_KEY = "your_secret_key"  # Replace with a secure random string
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1
+
+def create_reset_token(uhid: str) -> str:
+    """Generate JWT token for password reset."""
+    expiration = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)  # Token expires in 15 minutes
+    expire = datetime.utcnow() + expiration
+    to_encode = {"sub": uhid, "exp": expire}
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_reset_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        uhid: str = payload.get("sub")
+        if uhid is None:
+            raise JWTError("User ID not found in token")
+        return uhid
+    except ExpiredSignatureError:
+        # Token is expired
+        return None
+    except JWTError:
+        # Token is invalid in other ways
+        return None
+
+# Function to send the reset link via email using SMTP
+def send_reset_email(email: str, token: str):
+    """Send password reset link via email using SMTP."""
+    reset_url = f"http://localhost:3000?token={token}"
+
+    sender_email = "adm.promxp@gmail.com"
+    receiver_email = email
+    password = "ucrwqqrajibptcjg"  # Consider storing this securely (env variable)
+
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 465
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = receiver_email
+    msg['Subject'] = "Password Reset Request"
+
+    body = f"Click the link below to reset your password:\n{reset_url}"
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(sender_email, password)
+            text = msg.as_string()
+            server.sendmail(sender_email, receiver_email, text)
+        print("Password reset email sent successfully")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+
+@app.post("/request_password_reset")
+async def request_password_reset(
+    background_tasks: BackgroundTasks,
+    uhid: str,
+    email: EmailStr = Query(..., description="Valid email address to send the reset link to"), 
+):
+    """Request password reset and send the reset link via email."""
+    # Find user in the database
+    user = await admin_lobby.find_one({"uhid": uhid}) or await doctor_lobby.find_one({"uhid": uhid}) or await patient_data.find_one({"uhid": uhid})
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Generate the reset token
+    token = create_reset_token(uhid)
+    
+    # Send reset email
+    background_tasks.add_task(send_reset_email, email, token)
+    
+    return {"message": "Password reset link sent to your email."}
+
+def verify_reset_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
+
+@app.post("/reset_password")
+async def reset_password(token: str, password_reset_request: PasswordResetRequest):
+    # Decode token
+    uhid = verify_reset_token(token)
+    if uhid is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    
+    # Check each collection to find the user
+    user = await admin_lobby.find_one({"uhid": uhid})
+    if user:
+        result = await admin_lobby.update_one(
+            {"uhid": uhid},
+            {"$set": {"password": password_reset_request.new_password}}
+        )
+    else:
+        user = await doctor_lobby.find_one({"uhid": uhid})
+        if user:
+            result = await doctor_lobby.update_one(
+                {"uhid": uhid},
+                {"$set": {"password": password_reset_request.new_password}}
+            )
+        else:
+            user = await patient_data.find_one({"uhid": uhid})
+            if user:
+                result = await patient_data.update_one(
+                    {"uhid": uhid},
+                    {"$set": {"password": password_reset_request.new_password}}
+                )
+            else:
+                raise HTTPException(status_code=404, detail="User not found")
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=400, detail="Failed to update the password")
+
+    return {"message": "Password has been successfully reset."}

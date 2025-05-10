@@ -107,6 +107,7 @@ class PostSurgeryDetails(BaseModel):
     date_of_surgery: date
     surgeon: str
     surgery_name: str
+    sub_doctor: str
     procedure: str
     implant: str
     technology: str
@@ -308,3 +309,5 @@ class EmailRequest(BaseModel):
 class QuestionnaireResetRequest(BaseModel):
     period: str
     questionnaires: list[str]
+
+    
