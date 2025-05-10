@@ -781,7 +781,7 @@ def verify_reset_token(token: str) -> Optional[str]:
 # Function to send the reset link via email using SMTP
 def send_reset_email(email: str, token: str):
     """Send password reset link via email using SMTP."""
-    reset_url = f"http://localhost:3000?token={token}"
+    reset_url = f"https://developer-forgotpassword.onrender.com?token={token}"
 
     sender_email = "adm.promxp@gmail.com"
     receiver_email = email
