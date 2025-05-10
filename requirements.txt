@@ -18,6 +18,7 @@ numpy==1.23.5
 Pillow==11.1.0
 protobuf==6.30.2
 pydantic==2.11.2
+python-jose==3.3.0
 pymongo==4.5.0
 pywin32-ctypes==0.2.2
 railroad==0.5.0
